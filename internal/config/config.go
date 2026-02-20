@@ -27,8 +27,8 @@ type Config struct {
 func Load() (*Config, error) {
 	cfg := &Config{
 		NumWorkers:       2,
-		ChunkSize:        100,
-		MaxAttempts:      3,
+		ChunkSize:        10,
+		MaxAttempts:      5,
 		SweepIntervalMs:  30000,
 		WorkerIntervalMs: 10,
 		ClaimTimeoutMs:   120000,
