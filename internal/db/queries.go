@@ -296,6 +296,13 @@ func insertLogs(ctx context.Context, tx pgx.Tx, logs []Log) error {
 	return tx.SendBatch(ctx, batch).Close()
 }
 
+// CountLogs returns the total number of rows in the logs table.
+func CountLogs(ctx context.Context, pool *pgxpool.Pool) (int, error) {
+	var count int
+	err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM logs`).Scan(&count)
+	return count, err
+}
+
 // QueryLogs returns logs matching the given filter, with pagination.
 //
 // The WHERE clause is built dynamically so PostgreSQL always sees concrete

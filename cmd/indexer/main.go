@@ -8,7 +8,9 @@ import (
 	"github.com/joho/godotenv"
 
 	"evm-event-indexer/internal/config"
+	"evm-event-indexer/internal/coordinator"
 	"evm-event-indexer/internal/db"
+	"evm-event-indexer/internal/rpc"
 )
 
 func main() {
@@ -51,5 +53,14 @@ func main() {
 		"chunk_size", cfg.ChunkSize,
 	)
 
-	// Coordinator, workers, sweep, and API will be wired here in later phases.
+	rpcClient := rpc.New(cfg.RPCURL, cfg.MaxAttempts)
+
+	coord := coordinator.New(cfg, pool, rpcClient)
+
+	// API server will be started here, reading coord.ActiveWorkers().
+
+	if err := coord.Run(ctx); err != nil {
+		slog.Error("coordinator error", "error", err)
+		os.Exit(1)
+	}
 }
