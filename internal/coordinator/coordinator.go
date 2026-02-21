@@ -5,11 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"os"
-	"os/signal"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -42,15 +39,10 @@ func (c *Coordinator) ActiveWorkers() int64 {
 
 // Run orchestrates the full indexing run:
 //  1. Seeds the chunks table for the configured block range.
-//  2. Registers SIGINT/SIGTERM so the context is cancelled on shutdown.
-//  3. Spawns NUM_WORKERS worker goroutines
-//  4. Blocks until all workers exit.
-//  5. Prints the final summary.
+//  2. Spawns NUM_WORKERS worker goroutines.
+//  3. Blocks until all workers exit (ctx cancellation or no work remaining).
+//  4. Prints the final summary.
 func (c *Coordinator) Run(ctx context.Context) error {
-	// Cancels the context on SIGINT/SIGTERM so workers exit their current loop.
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	// 1. Seed chunks.
 	chunks := buildChunks(c.cfg.BlockFrom, c.cfg.BlockTo, c.cfg.ChunkSize)
 	if err := db.SeedChunks(ctx, c.pool, chunks); err != nil {
