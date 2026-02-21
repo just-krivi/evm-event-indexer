@@ -17,6 +17,7 @@ import (
 	"evm-event-indexer/internal/config"
 	"evm-event-indexer/internal/db"
 	"evm-event-indexer/internal/rpc"
+	"evm-event-indexer/internal/sweep"
 	"evm-event-indexer/internal/worker"
 )
 
@@ -64,23 +65,34 @@ func (c *Coordinator) Run(ctx context.Context) error {
 
 	start := time.Now()
 
-	// Phase 4: sweep goroutine will be started here.
+	// Start sweep goroutine with its own cancel so it stops when workers are done.
+	sweepCtx, cancelSweep := context.WithCancel(ctx)
+	defer cancelSweep()
+
+	var sweepWg sync.WaitGroup
+	sweepWg.Add(1)
+	go func() {
+		defer sweepWg.Done()
+		sweep.Run(sweepCtx, c.pool, c.cfg.SweepIntervalMs, c.cfg.ClaimTimeoutMs, c.cfg.MaxAttempts)
+	}()
 
 	// 2. Spawn workers.
-	var wg sync.WaitGroup
+	var workerWg sync.WaitGroup
 	for i := 1; i <= c.cfg.NumWorkers; i++ {
-		wg.Add(1)
+		workerWg.Add(1)
 		id := i
 		c.numWorkers.Add(1)
 		go func() {
-			defer wg.Done()
+			defer workerWg.Done()
 			defer c.numWorkers.Add(-1)
 			worker.Run(ctx, id, c.cfg, c.pool, c.rpc)
 		}()
 	}
 
-	// 3. Block until all workers have exited.
-	wg.Wait()
+	// 3. Block until all workers have exited, then stop sweep.
+	workerWg.Wait()
+	cancelSweep()
+	sweepWg.Wait()
 
 	// 4. Print summary (use a fresh context — the run context may be cancelled).
 	c.printSummary(context.Background(), start)
