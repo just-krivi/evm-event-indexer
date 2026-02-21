@@ -303,17 +303,21 @@ func TestWorkerRun_SplitsChunkOnTooLarge(t *testing.T) {
 func TestWorkerRun_ExitsWhenNothingToDo(t *testing.T) {
 	ctx, pool := setupDB(t)
 
-	// No chunks seeded — worker must exit immediately without hitting RPC.
+	// No chunks seeded — in multi-process mode workers wait for coordinator to seed.
+	// Cancel the context to confirm the worker exits cleanly without hitting RPC.
+	cancelCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		Run(ctx, 1, workerCfg(), pool, rpc.New("http://localhost:9999", 1))
+		Run(cancelCtx, 1, workerCfg(), pool, rpc.New("http://localhost:9999", 1))
 	}()
 
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("worker did not exit when database is empty")
+		t.Fatal("worker did not exit after context cancellation")
 	}
 }
 

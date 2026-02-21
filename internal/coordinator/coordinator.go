@@ -6,41 +6,30 @@ import (
 	"log/slog"
 	"math"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"evm-event-indexer/internal/config"
 	"evm-event-indexer/internal/db"
-	"evm-event-indexer/internal/rpc"
 	"evm-event-indexer/internal/sweep"
-	"evm-event-indexer/internal/worker"
 )
 
-// Coordinator seeds chunks, manages worker lifecycles, and prints the final summary.
+// Coordinator seeds chunks, runs the sweep, and polls for completion.
 type Coordinator struct {
-	cfg        *config.Config
-	pool       *pgxpool.Pool
-	rpc        *rpc.Client
-	numWorkers atomic.Int64 // count of currently active worker goroutines
+	cfg  *config.Config
+	pool *pgxpool.Pool
 }
 
-// New creates a Coordinator wired to the given config, database pool, and RPC client.
-func New(cfg *config.Config, pool *pgxpool.Pool, rpcClient *rpc.Client) *Coordinator {
-	return &Coordinator{cfg: cfg, pool: pool, rpc: rpcClient}
-}
-
-// ActiveWorkers returns the number of currently running worker goroutines.
-// Used by the /health endpoint (wired in Phase 5).
-func (c *Coordinator) ActiveWorkers() int64 {
-	return c.numWorkers.Load()
+// New creates a Coordinator wired to the given config and database pool.
+func New(cfg *config.Config, pool *pgxpool.Pool) *Coordinator {
+	return &Coordinator{cfg: cfg, pool: pool}
 }
 
 // Run orchestrates the full indexing run:
 //  1. Seeds the chunks table for the configured block range.
-//  2. Spawns NUM_WORKERS worker goroutines.
-//  3. Blocks until all workers exit (ctx cancellation or no work remaining).
+//  2. Starts the sweep goroutine.
+//  3. Polls the DB until all chunks are done or failed (or ctx is cancelled).
 //  4. Prints the final summary.
 func (c *Coordinator) Run(ctx context.Context) error {
 	// 1. Seed chunks.
@@ -57,7 +46,7 @@ func (c *Coordinator) Run(ctx context.Context) error {
 
 	start := time.Now()
 
-	// Start sweep goroutine with its own cancel so it stops when workers are done.
+	// 2. Start sweep goroutine.
 	sweepCtx, cancelSweep := context.WithCancel(ctx)
 	defer cancelSweep()
 
@@ -68,21 +57,39 @@ func (c *Coordinator) Run(ctx context.Context) error {
 		sweep.Run(sweepCtx, c.pool, c.cfg.SweepIntervalMs, c.cfg.ClaimTimeoutMs, c.cfg.MaxAttempts)
 	}()
 
-	// 2. Spawn workers.
-	var workerWg sync.WaitGroup
-	for i := 1; i <= c.cfg.NumWorkers; i++ {
-		workerWg.Add(1)
-		id := i
-		c.numWorkers.Add(1)
-		go func() {
-			defer workerWg.Done()
-			defer c.numWorkers.Add(-1)
-			worker.Run(ctx, id, c.cfg, c.pool, c.rpc)
-		}()
+	// 3. Poll until all chunks are terminal (done or failed) or ctx is cancelled.
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	slog.Info("coordinator waiting for workers to process chunks")
+poll:
+	for {
+		select {
+		case <-ctx.Done():
+			slog.Info("coordinator context cancelled, stopping")
+			break poll
+		case <-ticker.C:
+			stats, err := db.GetChunkStats(ctx, c.pool)
+			if err != nil {
+				if ctx.Err() == nil {
+					slog.Error("failed to get chunk stats", "error", err)
+				}
+				continue
+			}
+			if stats.Total > 0 && stats.Pending == 0 && stats.InProgress == 0 {
+				slog.Info("all chunks processed")
+				break poll
+			}
+			slog.Info("progress",
+				"done", stats.Done,
+				"pending", stats.Pending,
+				"in_progress", stats.InProgress,
+				"failed", stats.Failed,
+				"total", stats.Total,
+			)
+		}
 	}
 
-	// 3. Block until all workers have exited, then stop sweep.
-	workerWg.Wait()
 	cancelSweep()
 	sweepWg.Wait()
 
@@ -142,6 +149,5 @@ func (c *Coordinator) printSummary(ctx context.Context, start time.Time) {
 	fmt.Printf("  Total blocks:   %d\n", totalBlocks)
 	fmt.Printf("  Total time:      %.1fs\n", elapsedSec)
 	fmt.Printf("  Avg rate:       %.1f blocks/s | %.0f logs/s\n", blocksPerSec, logsPerSec)
-	fmt.Printf("  Workers:        %d\n", c.cfg.NumWorkers)
 	fmt.Println("════════════════════════════════════════════")
 }

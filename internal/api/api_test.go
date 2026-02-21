@@ -31,9 +31,9 @@ func (m *mockStore) QueryLogs(_ context.Context, f db.LogFilter) ([]db.Log, erro
 }
 
 // newTestServer builds a Server wired to the given mock store.
-// configuredWorkers=4, activeWorkers always returns 2.
+// activeWorkers always returns 2 (simulates 2 in_progress chunks).
 func newTestServer(store *mockStore) *Server {
-	return New(":0", store, 4, func() int64 { return 2 })
+	return New(":0", store, func() int64 { return 2 })
 }
 
 func get(s *Server, path string) *httptest.ResponseRecorder {
@@ -62,9 +62,6 @@ func TestHealth_Normal(t *testing.T) {
 
 	if resp.Status != "ok" {
 		t.Errorf("status: got %q, want %q", resp.Status, "ok")
-	}
-	if resp.Workers.Configured != 4 {
-		t.Errorf("configured workers: got %d, want 4", resp.Workers.Configured)
 	}
 	if resp.Workers.Active != 2 {
 		t.Errorf("active workers: got %d, want 2", resp.Workers.Active)

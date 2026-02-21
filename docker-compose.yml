@@ -1,0 +1,46 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: indexer
+      POSTGRES_USER: indexer
+      POSTGRES_PASSWORD: indexer
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U indexer"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  coordinator:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://indexer:indexer@postgres:5432/indexer
+      MODE: coordinator
+    ports:
+      - "${API_PORT:-3000}:${API_PORT:-3000}"
+
+  worker:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      coordinator:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://indexer:indexer@postgres:5432/indexer
+      MODE: worker
+    # no ports — workers don't serve HTTP
+
+volumes:
+  pgdata:

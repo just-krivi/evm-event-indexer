@@ -9,11 +9,11 @@ import (
 )
 
 type Config struct {
+	Mode             string // "coordinator" | "worker"
 	RPCURL           string
 	DatabaseURL      string
 	BlockFrom        int
 	BlockTo          int
-	NumWorkers       int
 	ChunkSize        int
 	MaxAttempts      int
 	SweepIntervalMs  int
@@ -26,9 +26,9 @@ type Config struct {
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		NumWorkers:       2,
+		Mode:             "coordinator",
 		ChunkSize:        10,
-		MaxAttempts:      5,
+		MaxAttempts:      3,
 		SweepIntervalMs:  30000,
 		WorkerIntervalMs: 10,
 		ClaimTimeoutMs:   120000,
@@ -62,11 +62,8 @@ func Load() (*Config, error) {
 	}
 
 	// Optional fields with defaults
-	if v := os.Getenv("NUM_WORKERS"); v != "" {
-		cfg.NumWorkers, err = parseInt("NUM_WORKERS", v)
-		if err != nil {
-			errs = append(errs, err.Error())
-		}
+	if v := os.Getenv("MODE"); v != "" {
+		cfg.Mode = v
 	}
 
 	if v := os.Getenv("CHUNK_SIZE"); v != "" {
@@ -139,6 +136,9 @@ func Load() (*Config, error) {
 func (c *Config) validate() error {
 	var errs []string
 
+	if c.Mode != "coordinator" && c.Mode != "worker" {
+		errs = append(errs, fmt.Sprintf("MODE must be 'coordinator' or 'worker', got %q", c.Mode))
+	}
 	if c.BlockFrom < 0 {
 		errs = append(errs, "BLOCK_FROM must be >= 0")
 	}
@@ -147,9 +147,6 @@ func (c *Config) validate() error {
 	}
 	if c.BlockTo < c.BlockFrom {
 		errs = append(errs, "BLOCK_TO must be >= BLOCK_FROM")
-	}
-	if c.NumWorkers < 1 {
-		errs = append(errs, "NUM_WORKERS must be >= 1")
 	}
 	if c.ChunkSize < 1 {
 		errs = append(errs, "CHUNK_SIZE must be >= 1")

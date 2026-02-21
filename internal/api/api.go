@@ -41,19 +41,17 @@ func (p *PoolStore) QueryLogs(ctx context.Context, f db.LogFilter) ([]db.Log, er
 
 // Server is the HTTP query API.
 type Server struct {
-	store             Store
-	configuredWorkers int
-	activeWorkers     func() int64
-	httpServer        *http.Server
+	store         Store
+	activeWorkers func() int64
+	httpServer    *http.Server
 }
 
 // New creates a Server. addr is the listen address (e.g. ":3000").
-// activeWorkers is called on each /health request to get the live count.
-func New(addr string, store Store, configuredWorkers int, activeWorkers func() int64) *Server {
+// activeWorkers is called on each /health request to get the in_progress chunk count.
+func New(addr string, store Store, activeWorkers func() int64) *Server {
 	s := &Server{
-		store:             store,
-		configuredWorkers: configuredWorkers,
-		activeWorkers:     activeWorkers,
+		store:         store,
+		activeWorkers: activeWorkers,
 	}
 
 	mux := http.NewServeMux()
@@ -111,8 +109,7 @@ type logsResponse struct {
 }
 
 type workersInfo struct {
-	Configured int   `json:"configured"`
-	Active     int64 `json:"active"`
+	Active int64 `json:"active"`
 }
 
 type chunksInfo struct {
@@ -232,8 +229,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, healthResponse{
 		Status: "ok",
 		Workers: workersInfo{
-			Configured: s.configuredWorkers,
-			Active:     s.activeWorkers(),
+			Active: s.activeWorkers(),
 		},
 		Chunks: chunksInfo{
 			Total:                  stats.Total,

@@ -29,10 +29,10 @@ func TestLoad_Defaults(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if cfg.NumWorkers != 2 {
-		t.Errorf("NumWorkers: got %d, want 2", cfg.NumWorkers)
+	if cfg.Mode != "coordinator" {
+		t.Errorf("Mode: got %q, want %q", cfg.Mode, "coordinator")
 	}
-	if cfg.ChunkSize != 100 {
+	if cfg.ChunkSize != 10 {
 		t.Errorf("ChunkSize: got %d, want 100", cfg.ChunkSize)
 	}
 	if cfg.MaxAttempts != 3 {
@@ -84,7 +84,7 @@ func TestLoad_RequiredFieldsMissing(t *testing.T) {
 
 func TestLoad_InvalidIntegers(t *testing.T) {
 	fields := []string{
-		"BLOCK_FROM", "BLOCK_TO", "NUM_WORKERS", "CHUNK_SIZE",
+		"BLOCK_FROM", "BLOCK_TO", "CHUNK_SIZE",
 		"MAX_ATTEMPTS", "SWEEP_INTERVAL_MS", "WORKER_INTERVAL_MS",
 		"CLAIM_TIMEOUT_MS", "API_PORT", "DB_POOL_SIZE",
 	}
@@ -155,10 +155,6 @@ func TestLoad_ValidationRules(t *testing.T) {
 			env:  map[string]string{"BLOCK_FROM": "19005000", "BLOCK_TO": "19000000"},
 		},
 		{
-			name: "NUM_WORKERS zero",
-			env:  map[string]string{"NUM_WORKERS": "0"},
-		},
-		{
 			name: "CHUNK_SIZE zero",
 			env:  map[string]string{"CHUNK_SIZE": "0"},
 		},
@@ -177,6 +173,10 @@ func TestLoad_ValidationRules(t *testing.T) {
 		{
 			name: "WORKER_INTERVAL_MS negative",
 			env:  map[string]string{"WORKER_INTERVAL_MS": "-1"},
+		},
+		{
+			name: "MODE invalid",
+			env:  map[string]string{"MODE": "standalone"},
 		},
 	}
 
@@ -197,15 +197,14 @@ func TestLoad_ValidationRules(t *testing.T) {
 func TestLoad_OverrideDefaults(t *testing.T) {
 	validBase(t)
 	setEnv(t, map[string]string{
-		"NUM_WORKERS":       "8",
-		"CHUNK_SIZE":        "50",
-		"MAX_ATTEMPTS":      "5",
-		"SWEEP_INTERVAL_MS": "60000",
+		"CHUNK_SIZE":         "50",
+		"MAX_ATTEMPTS":       "5",
+		"SWEEP_INTERVAL_MS":  "60000",
 		"WORKER_INTERVAL_MS": "0",
-		"CLAIM_TIMEOUT_MS":  "240000",
-		"FRESH_START":       "false",
-		"API_PORT":          "8080",
-		"DB_POOL_SIZE":      "10",
+		"CLAIM_TIMEOUT_MS":   "240000",
+		"FRESH_START":        "false",
+		"API_PORT":           "8080",
+		"DB_POOL_SIZE":       "10",
 	})
 
 	cfg, err := Load()
@@ -213,9 +212,6 @@ func TestLoad_OverrideDefaults(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if cfg.NumWorkers != 8 {
-		t.Errorf("NumWorkers: got %d, want 8", cfg.NumWorkers)
-	}
 	if cfg.ChunkSize != 50 {
 		t.Errorf("ChunkSize: got %d, want 50", cfg.ChunkSize)
 	}
@@ -239,5 +235,31 @@ func TestLoad_OverrideDefaults(t *testing.T) {
 	}
 	if cfg.DBPoolSize != 10 {
 		t.Errorf("DBPoolSize: got %d, want 10", cfg.DBPoolSize)
+	}
+}
+
+func TestLoad_ModeVariants(t *testing.T) {
+	tests := []struct {
+		mode    string
+		wantErr bool
+	}{
+		{"coordinator", false},
+		{"worker", false},
+		{"standalone", true},
+	}
+
+	for _, tt := range tests {
+		t.Run("MODE="+tt.mode, func(t *testing.T) {
+			validBase(t)
+			t.Setenv("MODE", tt.mode)
+
+			_, err := Load()
+			if tt.wantErr && err == nil {
+				t.Errorf("expected error for MODE=%q", tt.mode)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("unexpected error for MODE=%q: %v", tt.mode, err)
+			}
+		})
 	}
 }

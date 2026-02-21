@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,12 @@ import (
 )
 
 var maxWaitMs = 500
+
+// NewID generates a random worker ID for use in multi-process deployments.
+// Purely observational — stored in chunks.worker_id for debugging.
+func NewID() int {
+	return rand.Intn(1_000_000) + 1
+}
 
 // Run processes chunks in a loop until the context is cancelled or no work remains.
 func Run(ctx context.Context, id int, cfg *config.Config, pool *pgxpool.Pool, rpcClient *rpc.Client) {
@@ -42,24 +49,30 @@ func Run(ctx context.Context, id int, cfg *config.Config, pool *pgxpool.Pool, rp
 			continue
 		}
 
-		// Nothing to claim at this moment
+		// Nothing to claim at this moment.
 		if chunk == nil {
-			// No pending chunk available — check how much work remains.
-			remaining, err := db.CountRemaining(ctx, pool)
+			stats, err := db.GetChunkStats(ctx, pool)
 			if err != nil {
 				if ctx.Err() != nil {
 					return
 				}
-				slog.Error("count remaining error", "worker", label, "error", err)
+				slog.Error("get chunk stats error", "worker", label, "error", err)
 				sleep(ctx, max(cfg.WorkerIntervalMs, maxWaitMs))
 				continue
 			}
-			if remaining == 0 {
+			if stats.Total == 0 {
+				// Coordinator hasn't seeded chunks yet — keep waiting.
+				fmt.Printf("[%s] waiting for coordinator to seed chunks...\n", label)
+				sleep(ctx, max(cfg.WorkerIntervalMs, maxWaitMs))
+				continue
+			}
+			if stats.Pending == 0 && stats.InProgress == 0 {
+				// All chunks are terminal (done or failed).
 				slog.Info("all chunks processed, exiting", "worker", label)
 				return
 			}
-			// Some chunks are in_progress (held by peers or stalled — sweep will re-queue).
-			fmt.Printf("[%s] no pending chunks, waiting... (in_progress: %d)\n", label, remaining)
+			// Some chunks are in_progress held by peers — sweep will re-queue stalled ones.
+			fmt.Printf("[%s] no pending chunks, waiting... (in_progress: %d)\n", label, stats.InProgress)
 			sleep(ctx, max(cfg.WorkerIntervalMs, maxWaitMs))
 			continue
 		}

@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 
 	"evm-event-indexer/internal/api"
@@ -16,6 +17,7 @@ import (
 	"evm-event-indexer/internal/coordinator"
 	"evm-event-indexer/internal/db"
 	"evm-event-indexer/internal/rpc"
+	"evm-event-indexer/internal/worker"
 )
 
 func main() {
@@ -29,7 +31,6 @@ func main() {
 	}
 
 	// Single signal context for the whole process.
-	// Cancels on the first SIGINT/SIGTERM — workers check ctx.Done() and stop.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -40,6 +41,15 @@ func main() {
 	}
 	defer pool.Close()
 
+	switch cfg.Mode {
+	case "coordinator":
+		runCoordinator(ctx, cfg, pool)
+	case "worker":
+		runWorker(ctx, cfg, pool)
+	}
+}
+
+func runCoordinator(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool) {
 	if err := db.Migrate(ctx, pool); err != nil {
 		slog.Error("migration failed", "error", err)
 		os.Exit(1)
@@ -54,37 +64,39 @@ func main() {
 		slog.Info("fresh start: truncated chunks and logs")
 	}
 
-	slog.Info("startup complete",
+	slog.Info("coordinator starting",
 		"block_from", cfg.BlockFrom,
 		"block_to", cfg.BlockTo,
-		"num_workers", cfg.NumWorkers,
 		"chunk_size", cfg.ChunkSize,
 	)
 
-	rpcClient := rpc.New(cfg.RPCURL, cfg.MaxAttempts)
-	coord := coordinator.New(cfg, pool, rpcClient)
+	coord := coordinator.New(cfg, pool)
 
-	// Start the API server before the coordinator so it's reachable immediately.
+	// activeWorkers reads in_progress chunk count from DB — works across process boundaries.
+	activeWorkers := func() int64 {
+		stats, err := db.GetChunkStats(context.Background(), pool)
+		if err != nil {
+			return 0
+		}
+		return int64(stats.InProgress)
+	}
+
 	apiServer := api.New(
 		fmt.Sprintf(":%d", cfg.APIPort),
 		api.NewPoolStore(pool),
-		cfg.NumWorkers,
-		coord.ActiveWorkers,
+		activeWorkers,
 	)
 	if err := apiServer.Start(); err != nil {
 		slog.Error("failed to start API server", "error", err)
 		os.Exit(1)
 	}
 
-	// Run the coordinator — blocks until all chunks are done or ctx is cancelled.
+	// Blocks until all chunks are terminal or ctx is cancelled.
 	if err := coord.Run(ctx); err != nil {
 		slog.Error("coordinator error", "error", err)
 		os.Exit(1)
 	}
 
-	// If the context was cancelled (signal received), shut down the API immediately.
-	// If indexing completed naturally, keep the API serving for queries and wait
-	// for an explicit shutdown signal.
 	if ctx.Err() != nil {
 		slog.Info("signal received, shutting down API server")
 	} else {
@@ -98,4 +110,13 @@ func main() {
 	if err := apiServer.Shutdown(shutdownCtx); err != nil {
 		slog.Error("API shutdown error", "error", err)
 	}
+}
+
+func runWorker(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool) {
+	id := worker.NewID()
+	rpcClient := rpc.New(cfg.RPCURL, cfg.MaxAttempts)
+
+	slog.Info("worker starting", "worker_id", id)
+	worker.Run(ctx, id, cfg, pool, rpcClient)
+	slog.Info("worker exiting", "worker_id", id)
 }
