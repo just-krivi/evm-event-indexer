@@ -247,7 +247,7 @@ curl "http://localhost:3000/health"
 
 ## Performance
 
-Performance measurement is done one 5k blocks with 1,2 and 4 workers in parallel.
+Performance measurement is done on 5k blocks with 1,2 and 4 workers in parallel.
 
 **Indexing 5k blocks was nearly 3x faster with 4 workers compared to the single worker.**
 
@@ -295,6 +295,22 @@ Config for performance testing:
 #### Indexing logs with 4 workers
 `make fresh-start N=4`
 
+When upgrading to pay-as-you go Alchemy plan, rate limits weren't hit and indexing
+performance was considerably better (under the same config as benchmarking with 1 and 2 workers):
+```
+════════════════════════════════════════════
+  EVM Indexer — Run Complete
+  Block range:    19000000 – 19005000
+  Total chunks:   501
+  Done:           501
+  Failed:         0
+  Total logs:     1323301
+  Total blocks:   5001
+  Total time:      45.0s
+  Avg rate:       111.1 blocks/s | 29405 logs/s
+════════════════════════════════════════════
+```
+
 Rate limits were constantly being hit under Alchemy's free tier plan.
 Different configuration options were fine-tuned for best performance.
 The following config gave best performance, but it was still slower
@@ -321,22 +337,6 @@ WORKER_INTERVAL_MS=250     # 250ms between two consecutive iterations on worker
   Avg rate:       62.5 blocks/s | 16540 logs/s
 ════════════════════════════════════════════
 
-```
-
-When upgrading to pay-as-you go Alchemy plan, rate limits weren't hit and indexing
-performance was considerably better (under the same config as benchmarking with 1 and 2 workers):
-```
-════════════════════════════════════════════
-  EVM Indexer — Run Complete
-  Block range:    19000000 – 19005000
-  Total chunks:   501
-  Done:           501
-  Failed:         0
-  Total logs:     1323301
-  Total blocks:   5001
-  Total time:      45.0s
-  Avg rate:       111.1 blocks/s | 29405 logs/s
-════════════════════════════════════════════
 ```
 
 ## Production Considerations
